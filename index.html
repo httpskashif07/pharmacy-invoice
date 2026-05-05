@@ -1296,7 +1296,7 @@ function generateInvoice() {
                 : rateMode==='pharmacy'  ? 'Rate/Delivery'
                 : 'Rate/Delivery (by distance)';
 
-  var zLabels = { A:'Zone A (0–5 km)', B:'Zone B (5–20 km)', C:'Zone C (20–30 km)', D:'Zone D (30+ km)' };
+  var zLabels = { A:'(0–5 km)', B:'(5–20 km)', C:'(20–30 km)', D:'(30+ km)' };
   var MN = 'font-family:\'DM Mono\',monospace;';
   var rows='';
   if (rateMode === 'pharmacy') {
@@ -1392,7 +1392,7 @@ function generateInvoice() {
     +(btPhone?'<br><span style="font-size:0.76rem;color:#666;">📞 '+escH(btPhone)+'</span>':'')
     +(btEmail?'<br><span style="font-size:0.76rem;color:#666;">✉ '+escH(btEmail)+'</span>':'')
     +'</p></div>'
-    +'<div class="inv-bill-block" style="text-align:right;"><h4>From</h4><p>'
+    +'<div class="inv-bill-block" style="text-align:right;max-width:48%;word-break:break-word;"><h4>From</h4><p>'
     +'<strong>'+escH(sender)+'</strong>'
     +(sAddrFull?'<br><span style="font-size:0.78rem;color:#555;">'+escH(sAddrFull)+'</span>':'')
     +(sPhone?'<br><span style="font-size:0.76rem;color:#666;">📞 '+escH(sPhone)+'</span>':'')
@@ -1413,7 +1413,7 @@ function generateInvoice() {
     +'</table>'
     +'<div class="inv-total-block"><div class="inv-total-inner"><div class="inv-total-label">Amount Due</div><div class="inv-total-amount">$'+grand.toFixed(2)+'</div></div></div>'
     +'</div>'
-    +'<div class="inv-footer"><span class="inv-footer-note">💳 '+escH(notes)+' &nbsp;|&nbsp; Generated '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'</span></div>'
+    +'<div class="inv-footer"><span class="inv-footer-note">Invoice &nbsp;|&nbsp; '+escH(notes)+' &nbsp;|&nbsp; Generated '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'</span></div>'
     +'</div>';
 
   document.getElementById('invoiceWrap').innerHTML = html;
@@ -1493,15 +1493,15 @@ function buildAndSavePDF() {
   var btLines = [
     {text:d.billTo||'Client', bold:true, size:9, color:[15,17,23], gap:4.5},
     {text:d.btAddrFull, size:7.5, color:[80,80,80], gap:4},
-    {text:d.btPhone ? '📞 '+d.btPhone : '', size:7.5, color:[100,100,100], gap:4},
-    {text:d.btEmail ? '✉ '+d.btEmail  : '', size:7.5, color:[100,100,100], gap:4}
+    {text:d.btPhone ? 'Tel: '+d.btPhone : '', size:7.5, color:[100,100,100], gap:4},
+    {text:d.btEmail ? 'Email: '+d.btEmail  : '', size:7.5, color:[100,100,100], gap:4}
   ].filter(function(l){return l.text;});
 
   var fromLines = [
     {text:d.sender||'Your Company', bold:true, size:9, color:[15,17,23], gap:4.5},
     {text:d.sAddrFull, size:7.5, color:[80,80,80], gap:4},
-    {text:d.sPhone ? '📞 '+d.sPhone : '', size:7.5, color:[100,100,100], gap:4},
-    {text:d.sEmail ? '✉ '+d.sEmail  : '', size:7.5, color:[100,100,100], gap:4},
+    {text:d.sPhone ? 'Tel: '+d.sPhone : '', size:7.5, color:[100,100,100], gap:4},
+    {text:d.sEmail ? 'Email: '+d.sEmail  : '', size:7.5, color:[100,100,100], gap:4},
     {text:d.sHST   ? 'HST# '+d.sHST : '', size:7, color:[130,130,130], gap:4}
   ].filter(function(l){return l.text;});
 
@@ -1521,7 +1521,7 @@ function buildAndSavePDF() {
 
   var body=[], dataRowCount=0;
   if (isPharm) {
-    var pzLabels = {A:'Zone A (0–5 km)',B:'Zone B (5–20 km)',C:'Zone C (20–30 km)',D:'Zone D (30+ km)'};
+    var pzLabels = {A:'(0–5 km)',B:'(5–20 km)',C:'(20–30 km)',D:'(30+ km)'};
     Object.keys(d.pharmZones).sort().forEach(function(name) {
       var ps = d.pharmZones[name];
       if (!ps.zoneEnabled) {
@@ -1799,6 +1799,14 @@ function doSignIn() {
   // Regular users: look up email by username in Firestore, then Firebase Auth
   db.collection('usernames').doc(username).get().then(function(snap) {
     if (!snap.exists) {
+      // Fall back to localStorage for accounts created before Firebase was added
+      var accounts = getAccounts();
+      if (accounts[username] && accounts[username].password === btoa(unescape(encodeURIComponent(pass)))) {
+        restoreBtn();
+        activateSession(username, accounts[username]);
+        showToast('Signed in. Re-register to enable cross-device sync.');
+        return;
+      }
       restoreBtn();
       errEl.textContent = 'Incorrect username or password.';
       return;
