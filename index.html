@@ -8,6 +8,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 
@@ -1609,6 +1612,22 @@ function buildAndSavePDF() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// FIREBASE SETUP
+// ══════════════════════════════════════════════════════════════════════════
+var firebaseConfig = {
+  apiKey: "AIzaSyCtw2CAtgkjonftRvCBA0lDwQpjYWNWS8I",
+  authDomain: "pharmacy-invoice.firebaseapp.com",
+  projectId: "pharmacy-invoice",
+  storageBucket: "pharmacy-invoice.firebasestorage.app",
+  messagingSenderId: "513522841528",
+  appId: "1:513522841528:web:bdf2298f3c5bddc0f7c14d"
+};
+firebase.initializeApp(firebaseConfig);
+var db = firebase.firestore();
+var fbAuth = firebase.auth();
+var currentUserUid = null;
+
+// ══════════════════════════════════════════════════════════════════════════
 // AUTH SYSTEM
 // ══════════════════════════════════════════════════════════════════════════
 var currentUser = null;
@@ -1616,7 +1635,63 @@ var histFilter  = 'all';
 
 function getAccounts(){ return JSON.parse(localStorage.getItem('phig_accounts')||'{}'); }
 function getUserInvoices(u){ return JSON.parse(localStorage.getItem('phig_inv_'+u)||'[]'); }
-function saveUserInvoices(u,arr){ localStorage.setItem('phig_inv_'+u, JSON.stringify(arr)); }
+
+function saveUserInvoices(u, arr) {
+  localStorage.setItem('phig_inv_'+u, JSON.stringify(arr));
+  var uid = localStorage.getItem('phig_uid_'+u);
+  if (uid) {
+    db.collection('userInvoices').doc(uid).set({ list: arr, updatedAt: new Date().toISOString() })
+      .catch(function(e){ console.warn('Invoice sync:', e); });
+  }
+}
+
+function loadUserDataFromFirestore(uid, username) {
+  var tasks = [
+    db.collection('users').doc(uid).get().then(function(doc) {
+      if (doc.exists) {
+        var profile = doc.data();
+        var accounts = getAccounts();
+        accounts[username] = profile;
+        localStorage.setItem('phig_accounts', JSON.stringify(accounts));
+      }
+    }).catch(function(){}),
+    db.collection('userInvoices').doc(uid).get().then(function(doc) {
+      if (doc.exists) {
+        localStorage.setItem('phig_inv_'+username, JSON.stringify(doc.data().list || []));
+      }
+    }).catch(function(){}),
+    db.collection('userDrafts').doc(uid).get().then(function(doc) {
+      if (doc.exists && doc.data().state) {
+        localStorage.setItem('phig_draft_'+username, JSON.stringify(doc.data().state));
+      }
+    }).catch(function(){})
+  ];
+  return Promise.all(tasks);
+}
+
+function loadAdminDataFromFirestore() {
+  var tasks = [
+    db.collection('users').get().then(function(snap) {
+      var accounts = getAccounts();
+      snap.forEach(function(d) {
+        var u = d.data();
+        if (u.username) accounts[u.username] = u;
+      });
+      localStorage.setItem('phig_accounts', JSON.stringify(accounts));
+    }).catch(function(){}),
+    db.collection('adminInvoices').doc('all').get().then(function(doc) {
+      if (doc.exists) {
+        localStorage.setItem('phig_admin_inv', JSON.stringify(doc.data().list || []));
+      }
+    }).catch(function(){}),
+    db.collection('appData').doc('tickets').get().then(function(doc) {
+      if (doc.exists) {
+        localStorage.setItem('phig_tickets', JSON.stringify(doc.data().list || []));
+      }
+    }).catch(function(){})
+  ];
+  return Promise.all(tasks);
+}
 
 function showAuthPanel(panel) {
   var allPanels = ['formSignIn','formRegister','formForgotPass','formForgotPassOtp','formResetPass','formForgotUser','formForgotUserOtp'];
@@ -1646,27 +1721,107 @@ function switchAuthTab(tab) {
 
 function doRegister() {
   var name  = document.getElementById('regName').value.trim();
-  var email = document.getElementById('regEmail').value.trim();
+  var email = document.getElementById('regEmail').value.trim().toLowerCase();
   var user  = document.getElementById('regUser').value.trim().toLowerCase().replace(/\s+/g,'');
   var pass  = document.getElementById('regPass').value;
-  if (!name||!user||!pass) { document.getElementById('regError').textContent='Please fill in all required fields.'; return; }
-  if (pass.length < 6)     { document.getElementById('regError').textContent='Password must be at least 6 characters.'; return; }
-  if (user === 'admin')    { document.getElementById('regError').textContent='Username "admin" is reserved.'; return; }
-  var accounts = getAccounts();
-  if (accounts[user]) { document.getElementById('regError').textContent='Username already taken — try another.'; return; }
-  accounts[user] = { name:name, email:email, password:btoa(unescape(encodeURIComponent(pass))), createdAt:new Date().toISOString() };
-  localStorage.setItem('phig_accounts', JSON.stringify(accounts));
-  activateSession(user, accounts[user]);
+  var errEl = document.getElementById('regError');
+  errEl.textContent = '';
+  if (!name||!user||!pass||!email) { errEl.textContent='Please fill in all fields.'; return; }
+  if (pass.length < 6)     { errEl.textContent='Password must be at least 6 characters.'; return; }
+  if (user === 'admin')    { errEl.textContent='Username "admin" is reserved.'; return; }
+
+  var btn = document.querySelector('#formRegister .auth-cta');
+  btn.disabled = true; btn.textContent = 'Creating account…';
+
+  db.collection('usernames').doc(user).get().then(function(snap) {
+    if (snap.exists) {
+      errEl.textContent = 'Username already taken — try another.';
+      btn.disabled = false; btn.textContent = 'Create Account →';
+      return Promise.reject('taken');
+    }
+    return fbAuth.createUserWithEmailAndPassword(email, pass);
+  }).then(function(cred) {
+    if (!cred) return;
+    var uid = cred.user.uid;
+    currentUserUid = uid;
+    localStorage.setItem('phig_uid_'+user, uid);
+    var profile = { name:name, email:email, username:user, createdAt:new Date().toISOString(), isAdmin:false };
+    return db.collection('users').doc(uid).set(profile)
+      .then(function(){ return db.collection('usernames').doc(user).set({ uid:uid, email:email }); })
+      .then(function(){
+        var accounts = getAccounts();
+        accounts[user] = profile;
+        localStorage.setItem('phig_accounts', JSON.stringify(accounts));
+        btn.disabled = false; btn.textContent = 'Create Account →';
+        activateSession(user, profile);
+      });
+  }).catch(function(e) {
+    if (e === 'taken') return;
+    btn.disabled = false; btn.textContent = 'Create Account →';
+    if (e.code === 'auth/email-already-in-use') {
+      errEl.textContent = 'This email is already registered.';
+    } else if (e.code === 'auth/invalid-email') {
+      errEl.textContent = 'Invalid email address.';
+    } else {
+      errEl.textContent = 'Registration failed. Please try again.';
+      console.error(e);
+    }
+  });
 }
 
 function doSignIn() {
-  var user = document.getElementById('siUser').value.trim().toLowerCase();
+  var username = document.getElementById('siUser').value.trim().toLowerCase();
   var pass = document.getElementById('siPass').value;
-  var accounts = getAccounts();
-  if (!accounts[user] || accounts[user].password !== btoa(unescape(encodeURIComponent(pass)))) {
-    document.getElementById('siError').textContent = 'Incorrect username or password.'; return;
+  var errEl = document.getElementById('siError');
+  errEl.textContent = '';
+
+  var btn = document.querySelector('#formSignIn .auth-cta');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  var restoreBtn = function() { btn.disabled = false; btn.textContent = 'Sign In →'; };
+
+  // Admin uses localStorage auth only
+  if (username === 'admin') {
+    var accounts = getAccounts();
+    if (!accounts['admin'] || accounts['admin'].password !== btoa(unescape(encodeURIComponent(pass)))) {
+      restoreBtn(); errEl.textContent = 'Incorrect username or password.'; return;
+    }
+    loadAdminDataFromFirestore().then(function() {
+      var accts = getAccounts();
+      restoreBtn();
+      activateSession('admin', accts['admin'] || accounts['admin']);
+    }).catch(function() {
+      restoreBtn();
+      activateSession('admin', accounts['admin']);
+    });
+    return;
   }
-  activateSession(user, accounts[user]);
+
+  // Regular users: look up email by username in Firestore, then Firebase Auth
+  db.collection('usernames').doc(username).get().then(function(snap) {
+    if (!snap.exists) {
+      restoreBtn();
+      errEl.textContent = 'Incorrect username or password.';
+      return;
+    }
+    var email = snap.data().email;
+    return fbAuth.signInWithEmailAndPassword(email, pass).then(function(cred) {
+      currentUserUid = cred.user.uid;
+      localStorage.setItem('phig_uid_'+username, cred.user.uid);
+      return loadUserDataFromFirestore(cred.user.uid, username);
+    }).then(function() {
+      var accts = getAccounts();
+      restoreBtn();
+      activateSession(username, accts[username] || { name: username });
+    });
+  }).catch(function(e) {
+    restoreBtn();
+    if (e && (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential' || e.code === 'auth/user-not-found')) {
+      errEl.textContent = 'Incorrect username or password.';
+    } else if (e) {
+      errEl.textContent = 'Sign-in error. Please try again.';
+      console.error(e);
+    }
+  });
 }
 
 function activateSession(username, acct) {
@@ -1701,7 +1856,9 @@ function activateSession(username, acct) {
 }
 
 function doLogout() {
+  fbAuth.signOut().catch(function(){});
   currentUser = null;
+  currentUserUid = null;
   localStorage.removeItem('phig_current_user');
   hideAdminDashboard();
   document.getElementById('userPill').style.display    = 'none';
@@ -1718,12 +1875,55 @@ function doLogout() {
 function initAuth() {
   ensureAdminAccount();
   checkVersion();
-  var saved = localStorage.getItem('phig_current_user');
-  if (saved) {
-    var accounts = getAccounts();
-    if (accounts[saved]) { activateSession(saved, accounts[saved]); return; }
-  }
   document.getElementById('authOverlay').style.display = 'flex';
+  fbAuth.onAuthStateChanged(function(user) {
+    if (user) {
+      var savedUsername = localStorage.getItem('phig_current_user');
+      if (savedUsername && savedUsername !== 'admin') {
+        var accounts = getAccounts();
+        if (accounts[savedUsername]) {
+          currentUserUid = user.uid;
+          localStorage.setItem('phig_uid_'+savedUsername, user.uid);
+          activateSession(savedUsername, accounts[savedUsername]);
+          return;
+        }
+      }
+      // Username not in localStorage — look up from Firestore by uid
+      db.collection('users').doc(user.uid).get().then(function(doc) {
+        if (doc.exists) {
+          var profile = doc.data();
+          var username = profile.username;
+          if (!username) { document.getElementById('authOverlay').style.display = 'flex'; return; }
+          currentUserUid = user.uid;
+          localStorage.setItem('phig_uid_'+username, user.uid);
+          return loadUserDataFromFirestore(user.uid, username).then(function() {
+            var accounts = getAccounts();
+            activateSession(username, accounts[username] || profile);
+          });
+        } else {
+          document.getElementById('authOverlay').style.display = 'flex';
+        }
+      }).catch(function() {
+        document.getElementById('authOverlay').style.display = 'flex';
+      });
+    } else {
+      // No Firebase session — check for persisted admin session
+      var saved = localStorage.getItem('phig_current_user');
+      if (saved === 'admin') {
+        var accounts = getAccounts();
+        if (accounts['admin']) {
+          loadAdminDataFromFirestore().then(function() {
+            var accts = getAccounts();
+            activateSession('admin', accts['admin']);
+          }).catch(function() {
+            activateSession('admin', accounts['admin']);
+          });
+          return;
+        }
+      }
+      document.getElementById('authOverlay').style.display = 'flex';
+    }
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1766,6 +1966,10 @@ function handleSaveDraft() {
   state.savedAt = new Date().toISOString();
   localStorage.setItem('phig_draft_'+currentUser, JSON.stringify(state));
   if (invoiceSnap) saveInvoiceRecord('draft');
+  if (currentUserUid) {
+    db.collection('userDrafts').doc(currentUserUid).set({ state: state, savedAt: state.savedAt })
+      .catch(function(e){ console.warn('Draft sync:', e); });
+  }
   showToast('Draft saved successfully!');
 }
 
@@ -1781,6 +1985,10 @@ function restoreDraft() {
 function discardDraft() {
   if (!currentUser) return;
   localStorage.removeItem('phig_draft_'+currentUser);
+  if (currentUserUid) {
+    db.collection('userDrafts').doc(currentUserUid).delete()
+      .catch(function(e){ console.warn('Draft delete:', e); });
+  }
   document.getElementById('draftBanner').style.display = 'none';
   showToast('Draft discarded.');
 }
@@ -1966,7 +2174,11 @@ function checkVersion() {
 // ADMIN STORAGE
 // ══════════════════════════════════════════════════════════════════════════
 function getAdminInvoices()     { return JSON.parse(localStorage.getItem('phig_admin_inv')||'[]'); }
-function saveAdminInvoices(arr) { localStorage.setItem('phig_admin_inv', JSON.stringify(arr)); }
+function saveAdminInvoices(arr) {
+  localStorage.setItem('phig_admin_inv', JSON.stringify(arr));
+  db.collection('adminInvoices').doc('all').set({ list: arr, updatedAt: new Date().toISOString() })
+    .catch(function(e){ console.warn('Admin invoices sync:', e); });
+}
 
 function saveAdminCopy(userId, record) {
   var all = getAdminInvoices();
@@ -1978,7 +2190,11 @@ function saveAdminCopy(userId, record) {
 }
 
 function getTickets()     { return JSON.parse(localStorage.getItem('phig_tickets')||'[]'); }
-function saveTickets(arr) { localStorage.setItem('phig_tickets', JSON.stringify(arr)); }
+function saveTickets(arr) {
+  localStorage.setItem('phig_tickets', JSON.stringify(arr));
+  db.collection('appData').doc('tickets').set({ list: arr, updatedAt: new Date().toISOString() })
+    .catch(function(e){ console.warn('Tickets sync:', e); });
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 // ADMIN DASHBOARD
@@ -2363,23 +2579,38 @@ function doForgotPassStep1() {
   var errEl = document.getElementById('fpError');
   errEl.textContent = '';
   if (!user) { errEl.textContent = 'Please enter your username.'; return; }
-  var accounts = getAccounts();
-  if (!accounts[user]) { errEl.textContent = 'No account found with that username.'; return; }
-  var acct = accounts[user];
-  if (!acct.email) { errEl.textContent = 'No email address is linked to this account. Contact admin.'; return; }
-  var otp = _generateOtp();
-  _pendingOtp = { otp: otp, email: acct.email, username: user, purpose: 'password-reset', expires: Date.now() + 10*60*1000 };
-  errEl.innerHTML = '<span style="color:var(--muted)">Sending OTP to your email…</span>';
-  _sendOtpEmail(acct.email, acct.name || user, otp, 'Password Reset', function(ok) {
-    if (!ok) {
-      errEl.textContent = 'Failed to send OTP. Please try again.';
-      _pendingOtp = null;
-      return;
-    }
-    document.getElementById('fpOtpHint').textContent = 'OTP sent to ' + _maskEmail(acct.email);
-    document.getElementById('fpOtp').value = '';
-    document.getElementById('fpOtpError').textContent = '';
-    showAuthPanel('forgot-pass-otp');
+
+  // Admin: use OTP flow (localStorage auth)
+  if (user === 'admin') {
+    var accounts = getAccounts();
+    if (!accounts['admin']) { errEl.textContent = 'No account found.'; return; }
+    var acct = accounts['admin'];
+    if (!acct.email) { errEl.textContent = 'No email linked to this account.'; return; }
+    var otp = _generateOtp();
+    _pendingOtp = { otp: otp, email: acct.email, username: 'admin', purpose: 'password-reset', expires: Date.now() + 10*60*1000 };
+    errEl.innerHTML = '<span style="color:var(--muted)">Sending OTP…</span>';
+    _sendOtpEmail(acct.email, 'Administrator', otp, 'Password Reset', function(ok) {
+      if (!ok) { errEl.textContent = 'Failed to send OTP.'; _pendingOtp = null; return; }
+      document.getElementById('fpOtpHint').textContent = 'OTP sent to ' + _maskEmail(acct.email);
+      document.getElementById('fpOtp').value = '';
+      document.getElementById('fpOtpError').textContent = '';
+      showAuthPanel('forgot-pass-otp');
+    });
+    return;
+  }
+
+  // Regular users: send Firebase password reset email
+  errEl.innerHTML = '<span style="color:var(--muted)">Looking up account…</span>';
+  db.collection('usernames').doc(user).get().then(function(snap) {
+    if (!snap.exists) { errEl.textContent = 'No account found with that username.'; return; }
+    var email = snap.data().email;
+    return fbAuth.sendPasswordResetEmail(email).then(function() {
+      errEl.innerHTML = '<span style="color:var(--green)">✓ Password reset email sent to '
+        + _maskEmail(email) + '. Click the link in that email to set your new password, then sign in here.</span>';
+    });
+  }).catch(function(e) {
+    console.error(e);
+    errEl.textContent = 'Failed to send reset email. Please try again.';
   });
 }
 
@@ -2429,25 +2660,38 @@ function doForgotUserStep1() {
   var errEl = document.getElementById('fuError');
   errEl.textContent = '';
   if (!email) { errEl.textContent = 'Please enter your email address.'; return; }
-  var accounts = getAccounts();
-  var matched = Object.keys(accounts).find(function(u) {
-    return u !== 'admin' && accounts[u].email && accounts[u].email.toLowerCase() === email;
-  });
-  if (!matched) { errEl.textContent = 'No account found with that email address.'; return; }
-  var acct = accounts[matched];
-  var otp = _generateOtp();
-  _pendingOtp = { otp: otp, email: acct.email, username: matched, purpose: 'forgot-username', expires: Date.now() + 10*60*1000 };
-  errEl.innerHTML = '<span style="color:var(--muted)">Sending OTP to your email…</span>';
-  _sendOtpEmail(acct.email, acct.name || matched, otp, 'Username Recovery', function(ok) {
-    if (!ok) {
-      errEl.textContent = 'Failed to send OTP. Please try again.';
-      _pendingOtp = null;
-      return;
+
+  errEl.innerHTML = '<span style="color:var(--muted)">Looking up account…</span>';
+
+  // Query Firestore first, fall back to localStorage
+  db.collection('users').where('email', '==', email).limit(1).get().then(function(snap) {
+    var matched = null;
+    var acctName = null;
+    if (!snap.empty) {
+      var data = snap.docs[0].data();
+      matched = data.username;
+      acctName = data.name;
     }
-    document.getElementById('fuOtpHint').textContent = 'OTP sent to ' + _maskEmail(acct.email);
-    document.getElementById('fuOtp').value = '';
-    document.getElementById('fuOtpError').textContent = '';
-    showAuthPanel('forgot-user-otp');
+    if (!matched) {
+      var accounts = getAccounts();
+      var found = Object.keys(accounts).find(function(u) {
+        return u !== 'admin' && accounts[u].email && accounts[u].email.toLowerCase() === email;
+      });
+      if (found) { matched = found; acctName = accounts[found].name; }
+    }
+    if (!matched) { errEl.textContent = 'No account found with that email address.'; return; }
+    var otp = _generateOtp();
+    _pendingOtp = { otp: otp, email: email, username: matched, purpose: 'forgot-username', expires: Date.now() + 10*60*1000 };
+    _sendOtpEmail(email, acctName || matched, otp, 'Username Recovery', function(ok) {
+      if (!ok) { errEl.textContent = 'Failed to send OTP. Please try again.'; _pendingOtp = null; return; }
+      document.getElementById('fuOtpHint').textContent = 'OTP sent to ' + _maskEmail(email);
+      document.getElementById('fuOtp').value = '';
+      document.getElementById('fuOtpError').textContent = '';
+      showAuthPanel('forgot-user-otp');
+    });
+  }).catch(function(e) {
+    console.error(e);
+    errEl.textContent = 'Error looking up account. Please try again.';
   });
 }
 
