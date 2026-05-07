@@ -105,6 +105,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--paper);color:var(--ink);m
 .empty-state h3{font-family:'DM Serif Display',serif;font-size:1.15rem;color:var(--ink);margin-bottom:6px;}
 .empty-state p{font-size:0.78rem;line-height:1.6;max-width:280px;margin:0 auto;}
 
+.preview-panel{min-width:0;overflow:hidden;}
 .invoice-doc{background:white;border:1px solid var(--line);border-radius:4px;box-shadow:0 4px 18px var(--shadow);overflow:hidden;}
 .inv-header{background:#0f1117;color:#f5f0e8;padding:30px 38px 24px;display:flex;justify-content:space-between;align-items:flex-start;}
 .inv-company{font-family:'DM Serif Display',serif;font-size:1.3rem;margin-bottom:3px;}
@@ -115,10 +116,11 @@ body{font-family:'DM Sans',sans-serif;background:var(--paper);color:var(--ink);m
 .inv-strip{background:#c4451a;padding:8px 38px;display:flex;gap:32px;}
 .inv-strip-item{font-size:0.68rem;color:white;}
 .inv-strip-item b{display:block;font-size:1rem;font-family:'DM Serif Display',serif;}
-.inv-body{padding:26px 38px;}
+.inv-body{padding:26px 38px;overflow:hidden;}
 .inv-bill-row{display:flex;justify-content:space-between;margin-bottom:22px;}
 .inv-bill-block h4{font-family:'DM Mono',monospace;font-size:0.63rem;text-transform:uppercase;letter-spacing:0.12em;color:#7a7265;margin-bottom:4px;}
 .inv-bill-block p{font-size:0.81rem;line-height:1.7;}
+.inv-table-wrap{overflow-x:auto;}
 .inv-table{width:100%;border-collapse:collapse;font-size:0.79rem;}
 .inv-table thead tr{background:#ede8dc;border-bottom:2px solid #d4cfc5;}
 .inv-table th{font-family:'DM Mono',monospace;font-size:0.61rem;text-transform:uppercase;letter-spacing:0.1em;color:#7a7265;padding:8px 12px;text-align:left;}
@@ -127,10 +129,10 @@ body{font-family:'DM Sans',sans-serif;background:var(--paper);color:var(--ink);m
 .inv-table tbody tr:nth-child(even){background:#fdfcfa;}
 .inv-table tfoot tr{background:#ede8dc;}
 .inv-table tfoot td{border-top:2px solid #d4cfc5;border-bottom:none;font-weight:700;}
-.inv-total-block{margin-top:18px;display:flex;justify-content:flex-end;}
-.inv-total-inner{background:#0f1117;color:white;padding:13px 24px;border-radius:3px;text-align:right;min-width:200px;}
+.inv-total-block{margin-top:18px;display:flex;justify-content:flex-end;overflow:hidden;}
+.inv-total-inner{background:#0f1117;color:white;padding:13px 24px;border-radius:3px;text-align:right;min-width:200px;max-width:100%;box-sizing:border-box;word-break:break-word;}
 .inv-total-label{font-family:'DM Mono',monospace;font-size:0.63rem;text-transform:uppercase;letter-spacing:0.12em;color:#aaa;}
-.inv-total-amount{font-family:'DM Serif Display',serif;font-size:1.9rem;color:#f5f0e8;}
+.inv-total-amount{font-family:'DM Serif Display',serif;font-size:1.9rem;color:#f5f0e8;word-break:break-all;}
 .inv-footer{border-top:1px solid #d4cfc5;padding:13px 38px;}
 .inv-footer-note{font-size:0.68rem;color:#7a7265;font-style:italic;}
 .zone-sel{border:1px solid #d4cfc5;border-radius:2px;padding:2px 5px;font-size:0.71rem;font-family:'DM Mono',monospace;background:#ede8dc;cursor:pointer;}
@@ -1400,7 +1402,7 @@ function generateInvoice() {
     +(sHST?'<br><span style="font-size:0.73rem;color:#888;font-family:\'DM Mono\',monospace;">HST# '+escH(sHST)+'</span>':'')
     +'</p></div>'
     +'</div>'
-    +'<table class="inv-table">'
+    +'<div class="inv-table-wrap"><table class="inv-table">'
     +'<thead><tr>'
     +'<th>Pharmacy Name</th>'
     +(rateMode==='pharmacy'?'<th>Zone / City</th>':'')
@@ -1410,7 +1412,7 @@ function generateInvoice() {
     +'</tr></thead>'
     +'<tbody>'+rows+'</tbody>'
     +'<tbody>'+taxRowsHtml+'</tbody>'
-    +'</table>'
+    +'</table></div>'
     +'<div class="inv-total-block"><div class="inv-total-inner"><div class="inv-total-label">Amount Due</div><div class="inv-total-amount">$'+grand.toFixed(2)+'</div></div></div>'
     +'</div>'
     +'<div class="inv-footer"><span class="inv-footer-note">Invoice &nbsp;|&nbsp; '+escH(notes)+' &nbsp;|&nbsp; Generated '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'</span></div>'
@@ -1519,7 +1521,7 @@ function buildAndSavePDF() {
     ? [['Pharmacy Name', 'Zone / City', 'Deliveries', rateLabel, 'Amount']]
     : [['Pharmacy Name', 'Deliveries', rateLabel, 'Amount']];
 
-  var body=[], dataRowCount=0;
+  var body=[];
   if (isPharm) {
     var pzLabels = {A:'(0–5 km)',B:'(5–20 km)',C:'(20–30 km)',D:'(30+ km)'};
     Object.keys(d.pharmZones).sort().forEach(function(name) {
@@ -1527,20 +1529,17 @@ function buildAndSavePDF() {
       if (!ps.zoneEnabled) {
         if (ps.flatCount <= 0) return;
         body.push([name, '—', String(ps.flatCount), '$'+ps.flatRate.toFixed(2), '$'+(ps.flatCount*ps.flatRate).toFixed(2)]);
-        dataRowCount++;
       } else if (ps.zoneMode === 'city') {
         Object.keys(ps.cityRates||{}).sort().forEach(function(city) {
           var cr = ps.cityRates[city];
           if ((cr.count||0) <= 0) return;
           body.push([name, city, String(cr.count), '$'+(cr.rate||0).toFixed(2), '$'+(cr.count*cr.rate).toFixed(2)]);
-          dataRowCount++;
         });
       } else {
         ['A','B','C','D'].forEach(function(z) {
           var zd = ps[z];
           if (zd.count <= 0) return;
           body.push([name, pzLabels[z], String(zd.count), '$'+zd.rate.toFixed(2), '$'+(zd.count*zd.rate).toFixed(2)]);
-          dataRowCount++;
         });
       }
     });
@@ -1555,22 +1554,21 @@ function buildAndSavePDF() {
       }
       return [name, String(cnt), '$'+rate.toFixed(2), '$'+(cnt*rate).toFixed(2)];
     });
-    dataRowCount = d.entries.length;
   }
 
-  // Subtotal / Tax / Total rows (5 cols for pharmacy, 4 for others)
+  // Subtotal / Tax / Total rows — all in foot so they only appear on the last page
   var taxPct = d.taxRate%1===0 ? d.taxRate.toFixed(0) : d.taxRate.toFixed(1);
-  if (isPharm) {
-    body.push(['','','','Subtotal','$'+d.subtotal.toFixed(2)]);
-    body.push(['','','','Tax ('+taxPct+'%)','$'+d.taxAmt.toFixed(2)]);
-  } else {
-    body.push(['','','Subtotal','$'+d.subtotal.toFixed(2)]);
-    body.push(['','','Tax ('+taxPct+'%)','$'+d.taxAmt.toFixed(2)]);
-  }
-
   var foot = isPharm
-    ? [['','','','Total','$'+d.grand.toFixed(2)]]
-    : [['','','Total','$'+d.grand.toFixed(2)]];
+    ? [
+        ['','','','Subtotal','$'+d.subtotal.toFixed(2)],
+        ['','','','Tax ('+taxPct+'%)','$'+d.taxAmt.toFixed(2)],
+        ['','','','Total','$'+d.grand.toFixed(2)]
+      ]
+    : [
+        ['','','Subtotal','$'+d.subtotal.toFixed(2)],
+        ['','','Tax ('+taxPct+'%)','$'+d.taxAmt.toFixed(2)],
+        ['','','Total','$'+d.grand.toFixed(2)]
+      ];
 
   var colStyles = isPharm
     ? {2:{halign:'center'},3:{halign:'right'},4:{halign:'right'}}
@@ -1578,16 +1576,18 @@ function buildAndSavePDF() {
 
   doc.autoTable({
     startY:y, head:head, body:body, foot:foot, theme:'plain',
+    showFoot:'lastPage',
     headStyles:{fillColor:[237,232,220],textColor:[122,114,101],fontSize:6.5,fontStyle:'bold',halign:'left',cellPadding:{top:3.5,bottom:3.5,left:3.5,right:3.5}},
     bodyStyles:{fontSize:8,textColor:[15,17,23],cellPadding:{top:3.5,bottom:3.5,left:3.5,right:3.5}},
     footStyles:{fillColor:[237,232,220],textColor:[15,17,23],fontSize:8,fontStyle:'bold',cellPadding:{top:3.5,bottom:3.5,left:3.5,right:3.5}},
     alternateRowStyles:{fillColor:[253,252,250]},
     columnStyles:colStyles,
     didParseCell: function(data) {
-      if (data.section==='body' && data.row.index >= dataRowCount) {
+      if (data.section==='foot' && data.row.index < 2) {
         data.cell.styles.fillColor = [255,255,255];
         data.cell.styles.textColor = [122,114,101];
         data.cell.styles.fontSize  = 7.5;
+        data.cell.styles.fontStyle = 'normal';
       }
     },
     margin:{left:14,right:14}
